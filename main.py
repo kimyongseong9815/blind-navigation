@@ -8,14 +8,18 @@ from gtts import gTTS
 import pygame
 import os
 import asyncio
+import torch
+import torchvision
+from torchvision import transforms
+from torchvision.ops import nms
 
 
 class Label(Enum):
-    KERV = 0
+    STAIRS = 0
     GREEN_LIGHT = 1
     RED_LIGHT = 2
     CROSS_WALKS = 3
-
+ 
 
 class Coordinate:
     def __init__(self, x, y) -> None:
@@ -27,7 +31,7 @@ def play_sound(previous_filename, filename):
     def inner_playsound():
         sound = pygame.mixer.Sound(filename)
         while pygame.mixer.get_busy():
-            pass
+            passq
         channel.play(sound)
         if previous_filename:
             asyncio.run(delete_file(previous_filename))
@@ -74,6 +78,8 @@ while True:
     interpreter.invoke()
     output_data = interpreter.get_tensor(output_details[0]['index'])
 
+    detections_list = []
+
     for detection in output_data[0]:
         confidence = detection[4]
         if confidence > 0.25:
@@ -86,14 +92,30 @@ while True:
             class_scores = detection[5:9]
             class_id = np.argmax(class_scores)
             class_ids.add(class_id)
-            label = f'class {Label(class_id).name}'
 
-            cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-            cv2.putText(frame, label, (x_min, y_min - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            detections_list.append((class_id, confidence, x_min, y_min, x_max, y_max))
+            
+    detections_np = np.array(detections_list)
+    if detections_np.shape[0] > 0:
+        boxes = torch.tensor(detections_np[:, 2:], dtype=torch.float32)
+        scores = torch.tensor(detections_np[:, 1], dtype=torch.float32)
+        class_ids_np = detections_np[:, 0]
 
-            if class_id == 3:
-                cross_walk_coordinates.append(Coordinate(detection[0] * frame.shape[1], detection[1] * frame.shape[0]))
+        keep_indices = nms(boxes, scores, iou_threshold=0.5)
+        keep_detections = detections_np[keep_indices.numpy()]
 
+        keep_indices = nms(boxes, scores, iou_threshold=0.5)
+        keep_detections = detections_np[keep_indices.numpy()]
+
+        for nms_detection in keep_detections:
+            class_id, _, x_min, y_min, x_max, y_max = nms_detection.tolist()
+            label = f'class {Label(int(class_id)).name}'
+
+            cv2.rectangle(frame, (int(x_min), int(y_min)), (int(x_max), int(y_max)), (0, 255, 0), 2)
+            cv2.putText(frame, label, (int(x_min), int(y_min) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            if int(class_id) == 3:
+                cross_walk_coordinates.append(Coordinate((x_min + x_max) / 2, (y_min + y_max) / 2))
     x_list = []
     y_list = []
     if 3 in class_ids:
@@ -126,9 +148,11 @@ while True:
         tts = gTTS(text=script, lang='ko')
         timestamp = int(time.time())
         previous_filename = filename
-        filename = f'C:/Users/Kimyongseong/Desktop/blind-navigation/{timestamp}.mp3'
+        filename = f'C:/Users/Kimyongseong/Desktop/폴더/blind-navigation/{timestamp}.mp3'
         tts.save(filename)
         play_sound(previous_filename, filename)
+
+
         
     cv2.imshow('frame', frame)
     
